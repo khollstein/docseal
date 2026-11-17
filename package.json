@@ -1,0 +1,20 @@
+{
+  "name": "docseal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Internal controlled-document workflow for Confluence (Forge app)",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "lint": "forge lint",
+    "deploy": "forge deploy",
+    "deploy:prod": "forge deploy --environment production"
+  },
+  "dependencies": {
+    "@forge/api": "^8.5.0",
+    "@forge/bridge": "^7.3.0",
+    "@forge/kvs": "^2.1.2",
+    "@forge/react": "^12.5.0",
+    "@forge/resolver": "^2.0.2",
+    "react": "^18.3.1"
+  }
+}

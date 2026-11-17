@@ -1,0 +1,50 @@
+modules:
+  confluence:contentBylineItem:
+    - key: docseal-byline
+      title: Document control
+      tooltip: Document control
+      resource: byline
+      resolver:
+        function: resolver
+      dynamicProperties:
+        function: byline-props
+      render: native
+      viewportSize: medium
+  confluence:globalPage:
+    - key: docseal-register
+      title: Document Register
+      route: document-register
+      resource: register
+      resolver:
+        function: resolver
+      render: native
+  trigger:
+    - key: docseal-page-updated
+      function: on-page-updated
+      events:
+        - avi:confluence:updated:page
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: byline-props
+      handler: index.bylineProps
+    - key: on-page-updated
+      handler: index.onPageUpdated
+resources:
+  - key: byline
+    path: src/frontend/byline.jsx
+  - key: register
+    path: src/frontend/register.jsx
+permissions:
+  scopes:
+    - storage:app
+    - read:confluence-user
+    - read:confluence-groups
+    - read:page:confluence
+    - read:confluence-content.all
+    - write:confluence-content
+app:
+  runtime:
+    name: nodejs22.x
+  # Replaced by `forge register` with your own app id.
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
