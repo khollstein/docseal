@@ -64,14 +64,24 @@ resolver.define(
     const [doc, actor] = await Promise.all([getDoc(pageId), actorFrom(context)]);
     const actions = describeActions(doc, actor);
     // Approvers to choose from when submitting (excluding yourself if independence is required).
-    const approvers = actions.some((a) => a.name === 'submit')
-      ? (await getGroupMembers(APPROVER_GROUP)).filter((m) => !(REQUIRE_INDEPENDENT_APPROVAL && m.accountId === actor.accountId))
-      : [];
+    let approvers = [];
+    let approversError = null;
+    if (actions.some((a) => a.name === 'submit')) {
+      try {
+        approvers = (await getGroupMembers(APPROVER_GROUP)).filter(
+          (m) => !(REQUIRE_INDEPENDENT_APPROVAL && m.accountId === actor.accountId),
+        );
+      } catch (err) {
+        console.error(err);
+        approversError = 'Could not load the list of approvers. Check the app logs (forge logs).';
+      }
+    }
     return {
       doc: doc ? { ...doc, overdue: isReviewOverdue(doc) } : null,
       actor,
       actions,
       approvers,
+      approversError,
       docTypes: DOC_TYPES,
       approverGroup: APPROVER_GROUP,
     };

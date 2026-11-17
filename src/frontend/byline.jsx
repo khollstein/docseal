@@ -83,7 +83,7 @@ function Register({ docTypes, onDone }) {
   );
 }
 
-function Actions({ actions, approvers, approverGroup, onDone }) {
+function Actions({ actions, approvers, approversError, approverGroup, onDone }) {
   const [pending, setPending] = useState(null);
   const [text, setText] = useState('');
   const [reviewer, setReviewer] = useState(null);
@@ -138,7 +138,9 @@ function Actions({ actions, approvers, approverGroup, onDone }) {
           {needsReviewer(pending) && (
             <Stack space="space.050">
               <Label labelFor="reviewer-input">Approver</Label>
-              {approvers.length ? (
+              {approversError ? (
+                <SectionMessage appearance="error"><Text>{approversError}</Text></SectionMessage>
+              ) : approvers.length ? (
                 <Select
                   id="reviewer-input"
                   options={approvers.map((a) => ({ label: a.displayName || a.accountId, value: a.accountId }))}
@@ -183,7 +185,7 @@ function Actions({ actions, approvers, approverGroup, onDone }) {
 }
 
 function Status({ state, onChange }) {
-  const { doc, actions, actor, approverGroup, approvers } = state;
+  const { doc, actions, actor, approverGroup, approvers, approversError } = state;
   return (
     <Stack space="space.200">
       <Inline space="space.100" alignBlock="center">
@@ -220,7 +222,7 @@ function Status({ state, onChange }) {
         {doc.effectiveDate && <Field label="Effective"><Text>{formatDate(doc.effectiveDate)}</Text></Field>}
         {doc.nextReviewDue && <Field label="Next review"><Text>{formatDate(doc.nextReviewDue)}</Text></Field>}
       </Stack>
-      <Actions actions={actions} approvers={approvers || []} approverGroup={approverGroup} onDone={onChange} />
+      <Actions actions={actions} approvers={approvers || []} approversError={approversError} approverGroup={approverGroup} onDone={onChange} />
       {!actor.isApprover && (
         <Text size="small" color="color.text.subtlest">Approvals are limited to the “{approverGroup}” group.</Text>
       )}

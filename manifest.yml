@@ -45,6 +45,11 @@ permissions:
     - write:confluence-content
     - read:confluence-content.summary
     - write:comment:confluence
+    # Granular equivalents: some endpoints accept only these.
+    - read:group:confluence
+    - read:user:confluence
+    - read:content.restriction:confluence
+    - write:content.restriction:confluence
 app:
   runtime:
     name: nodejs22.x
