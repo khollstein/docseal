@@ -1,5 +1,6 @@
 // Thin wrappers around the Confluence REST API.
 import api, { route } from '@forge/api';
+import { WorkflowError } from './workflow.js';
 
 async function json(res, what) {
   if (!res.ok) {
@@ -17,8 +18,20 @@ export async function isInGroup(accountId, groupName) {
   return (body.results || []).some((g) => g.name === groupName);
 }
 
+// Read as the signed-in user first (they can see the page they're on), then as the app.
+// asUser isn't available in triggers, so that path falls back to the app account, which
+// needs "View" permission on the space (Space settings > Permissions > Apps).
 export async function getPage(pageId) {
-  const res = await api.asApp().requestConfluence(route`/wiki/api/v2/pages/${pageId}`);
+  let res;
+  try {
+    res = await api.asUser().requestConfluence(route`/wiki/api/v2/pages/${pageId}`);
+  } catch {
+    res = null;
+  }
+  if (!res || !res.ok) res = await api.asApp().requestConfluence(route`/wiki/api/v2/pages/${pageId}`);
+  if (res.status === 404) {
+    throw new WorkflowError('Confluence could not find this page. If it has never been published, publish it first. Otherwise give the app View permission on this space.');
+  }
   const page = await json(res, 'Page lookup');
   const links = page._links || {};
   return {
