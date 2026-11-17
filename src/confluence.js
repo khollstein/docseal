@@ -1,5 +1,6 @@
 // Thin wrappers around the Confluence REST API.
 import api, { route } from '@forge/api';
+import { kvs } from '@forge/kvs';
 import { WorkflowError } from './workflow.js';
 
 async function json(res, what) {
@@ -10,12 +11,19 @@ async function json(res, what) {
   return res.status === 204 ? null : res.json();
 }
 
+// Confluence's group-lookup endpoints reject Forge apps ("scope does not match"), but
+// "which groups is this user in" works. So group membership is checked per user, and the
+// group's ID is remembered from the first member seen (it's needed for page restrictions).
 export async function isInGroup(accountId, groupName) {
   const res = await api
     .asApp()
     .requestConfluence(route`/wiki/rest/api/user/memberof?accountId=${accountId}&limit=200`);
   const body = await json(res, 'Group lookup');
-  return (body.results || []).some((g) => g.name === groupName);
+  const group = (body.results || []).find((g) => g.name === groupName);
+  if (group?.id && (await kvs.get(`groupid:${groupName}`)) !== group.id) {
+    await kvs.set(`groupid:${groupName}`, group.id);
+  }
+  return !!group;
 }
 
 // Read as the signed-in user first (they can see the page they're on), then as the app.
@@ -43,13 +51,10 @@ export async function getPage(pageId) {
   };
 }
 
-let groupIdCache = {};
 async function getGroupId(groupName) {
-  if (!groupIdCache[groupName]) {
-    const res = await api.asApp().requestConfluence(route`/wiki/rest/api/group/by-name?name=${groupName}`);
-    groupIdCache[groupName] = (await json(res, 'Group lookup')).id;
-  }
-  return groupIdCache[groupName];
+  const id = await kvs.get(`groupid:${groupName}`);
+  if (!id) throw new Error(`ID of group "${groupName}" not known yet (no member of it has used the app)`);
+  return id;
 }
 
 // Try as the acting user first (they usually have restrict permission), then as the app.
@@ -77,26 +82,6 @@ export async function lockPage(pageId, groupName) {
 /** Remove the group-only edit restriction added by lockPage. */
 export async function unlockPage(pageId, groupName) {
   await restrictionCall('DELETE', pageId, await getGroupId(groupName));
-}
-
-/** Members of a group: [{ accountId, displayName }], people only (no apps/bots). */
-export async function getGroupMembers(groupName) {
-  const groupId = await getGroupId(groupName);
-  const members = [];
-  let start = 0;
-  for (;;) {
-    const res = await api
-      .asApp()
-      .requestConfluence(route`/wiki/rest/api/group/${groupId}/membersByGroupId?start=${start}&limit=200`);
-    const body = await json(res, 'Group members lookup');
-    const page = body.results || [];
-    for (const u of page) {
-      if (u.accountType === 'atlassian') members.push({ accountId: u.accountId, displayName: u.displayName || u.publicName });
-    }
-    if (page.length < 200) break;
-    start += 200;
-  }
-  return members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
 }
 
 const escapeHtml = (s) =>

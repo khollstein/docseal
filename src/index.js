@@ -19,7 +19,7 @@ import {
 } from './workflow.js';
 import { verifyChain } from './audit.js';
 import { appendAudit, claimDocNumber, getAudit, getDoc, listDocs, saveDoc } from './store.js';
-import { getGroupMembers, getPage, isInGroup, lockPage, postMentionComment, unlockPage } from './confluence.js';
+import { getPage, isInGroup, lockPage, postMentionComment, unlockPage } from './confluence.js';
 
 const resolver = new Resolver();
 const wfOpts = { requireIndependentApproval: REQUIRE_INDEPENDENT_APPROVAL };
@@ -63,25 +63,10 @@ resolver.define(
     const pageId = pageIdFrom(context);
     const [doc, actor] = await Promise.all([getDoc(pageId), actorFrom(context)]);
     const actions = describeActions(doc, actor);
-    // Approvers to choose from when submitting (excluding yourself if independence is required).
-    let approvers = [];
-    let approversError = null;
-    if (actions.some((a) => a.name === 'submit')) {
-      try {
-        approvers = (await getGroupMembers(APPROVER_GROUP)).filter(
-          (m) => !(REQUIRE_INDEPENDENT_APPROVAL && m.accountId === actor.accountId),
-        );
-      } catch (err) {
-        console.error(err);
-        approversError = 'Could not load the list of approvers. Check the app logs (forge logs).';
-      }
-    }
     return {
       doc: doc ? { ...doc, overdue: isReviewOverdue(doc) } : null,
       actor,
       actions,
-      approvers,
-      approversError,
       docTypes: DOC_TYPES,
       approverGroup: APPROVER_GROUP,
     };
@@ -128,8 +113,7 @@ resolver.define(
     const page = await getPage(pageId);
     const input = { changeSummary: payload?.changeSummary, comment: payload?.comment, reviewerId: payload?.reviewerId };
     if (name === 'submit' && input.reviewerId) {
-      const members = await getGroupMembers(APPROVER_GROUP);
-      if (!members.some((m) => m.accountId === input.reviewerId)) {
+      if (!(await isInGroup(input.reviewerId, APPROVER_GROUP))) {
         throw new WorkflowError(`The chosen approver is not in the “${APPROVER_GROUP}” group.`);
       }
     }
