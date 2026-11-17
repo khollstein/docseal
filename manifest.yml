@@ -43,6 +43,7 @@ permissions:
     - read:page:confluence
     - read:confluence-content.all
     - write:confluence-content
+    - read:confluence-content.summary
 app:
   runtime:
     name: nodejs22.x
