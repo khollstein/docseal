@@ -18,12 +18,14 @@ export const STATUS_LABEL = {
 
 export class WorkflowError extends Error {}
 
+const FIELD_LABEL = { changeSummary: 'A change summary', comment: 'A comment', reviewerId: 'An approver' };
+
 // Each action: allowed source statuses, target status, who may do it, and required input.
 export const ACTIONS = {
-  submit: { from: ['draft'], to: 'in_review', who: 'editor', requires: ['changeSummary'], label: 'Submit for review' },
+  submit: { from: ['draft'], to: 'in_review', who: 'editor', requires: ['changeSummary', 'reviewerId'], label: 'Submit for review' },
   withdraw: { from: ['in_review'], to: 'draft', who: 'submitterOrOwner', label: 'Withdraw' },
-  approve: { from: ['in_review'], to: 'approved', who: 'approver', label: 'Approve' },
-  reject: { from: ['in_review'], to: 'draft', who: 'approver', requires: ['comment'], label: 'Reject' },
+  approve: { from: ['in_review'], to: 'approved', who: 'assignedReviewer', label: 'Approve' },
+  reject: { from: ['in_review'], to: 'draft', who: 'assignedReviewer', requires: ['comment'], label: 'Reject' },
   publish: { from: ['approved'], to: 'published', who: 'approverOrOwner', label: 'Publish' },
   revise: { from: ['approved', 'published'], to: 'draft', who: 'approverOrOwner', label: 'Start new revision' },
   retire: { from: ['draft', 'approved', 'published'], to: 'obsolete', who: 'approver', requires: ['comment'], label: 'Retire (obsolete)' },
@@ -58,10 +60,17 @@ export function checkAction(doc, name, actor, input = {}, opts = {}) {
   const allowed = {
     editor: true,
     approver: actor.isApprover,
+    // The named reviewer only. Documents submitted before reviewers were named fall back to any approver.
+    assignedReviewer: actor.isApprover && (!doc.reviewerId || doc.reviewerId === actor.accountId),
     approverOrOwner: actor.isApprover || isOwner,
     submitterOrOwner: isSubmitter || isOwner,
   }[action.who];
-  if (!allowed) throw new WorkflowError(`You are not permitted to ${action.label.toLowerCase()} this document.`);
+  if (!allowed) {
+    if (action.who === 'assignedReviewer' && actor.isApprover) {
+      throw new WorkflowError('This revision is assigned to another approver.');
+    }
+    throw new WorkflowError(`You are not permitted to ${action.label.toLowerCase()} this document.`);
+  }
 
   if (name === 'approve' && opts.requireIndependentApproval && isSubmitter) {
     throw new WorkflowError('You submitted this revision, so someone else must approve it.');
@@ -69,8 +78,11 @@ export function checkAction(doc, name, actor, input = {}, opts = {}) {
   if (!opts.skipInput) {
     for (const field of action.requires || []) {
       if (!input[field] || !String(input[field]).trim()) {
-        throw new WorkflowError(`A ${field === 'changeSummary' ? 'change summary' : 'comment'} is required.`);
+        throw new WorkflowError(`${FIELD_LABEL[field]} is required.`);
       }
+    }
+    if (name === 'submit' && opts.requireIndependentApproval && input.reviewerId === actor.accountId) {
+      throw new WorkflowError('Choose someone other than yourself to approve this revision.');
     }
   }
   return action;
@@ -96,11 +108,13 @@ export function applyAction(doc, name, actor, input = {}, ctx = {}) {
       next.submittedBy = actor.accountId;
       next.submittedAt = now;
       next.pendingChangeSummary = input.changeSummary.trim();
+      next.reviewerId = input.reviewerId;
       break;
     case 'withdraw':
     case 'reject':
       next.submittedBy = null;
       next.submittedAt = null;
+      next.reviewerId = null;
       break;
     case 'approve':
       next.revision = (doc.revision || 0) + 1;
@@ -109,6 +123,7 @@ export function applyAction(doc, name, actor, input = {}, ctx = {}) {
       next.approvedPageVersion = ctx.pageVersion ?? null;
       next.changeSummary = doc.pendingChangeSummary || null;
       next.pendingChangeSummary = null;
+      next.reviewerId = null;
       break;
     case 'publish':
       next.publishedBy = actor.accountId;
@@ -118,6 +133,7 @@ export function applyAction(doc, name, actor, input = {}, ctx = {}) {
     case 'revise':
       next.submittedBy = null;
       next.submittedAt = null;
+      next.reviewerId = null;
       break;
     case 'retire':
       next.retiredAt = now;

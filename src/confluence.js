@@ -78,3 +78,53 @@ export async function lockPage(pageId, groupName) {
 export async function unlockPage(pageId, groupName) {
   await restrictionCall('DELETE', pageId, await getGroupId(groupName));
 }
+
+/** Members of a group: [{ accountId, displayName }], people only (no apps/bots). */
+export async function getGroupMembers(groupName) {
+  const groupId = await getGroupId(groupName);
+  const members = [];
+  let start = 0;
+  for (;;) {
+    const res = await api
+      .asApp()
+      .requestConfluence(route`/wiki/rest/api/group/${groupId}/membersByGroupId?start=${start}&limit=200`);
+    const body = await json(res, 'Group members lookup');
+    const page = body.results || [];
+    for (const u of page) {
+      if (u.accountType === 'atlassian') members.push({ accountId: u.accountId, displayName: u.displayName || u.publicName });
+    }
+    if (page.length < 200) break;
+    start += 200;
+  }
+  return members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+}
+
+const escapeHtml = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+/**
+ * Post a page comment that @mentions people, so Confluence emails/notifies them.
+ * `parts` is a list of strings (plain text) and { mention: accountId } objects.
+ * Posted as the acting user where possible (so it reads naturally), else as the app.
+ */
+export async function postMentionComment(pageId, parts) {
+  const html = parts
+    .map((p) => (typeof p === 'string' ? escapeHtml(p) : `<ac:link><ri:user ri:account-id="${escapeHtml(p.mention)}" /></ac:link>`))
+    .join('');
+  const body = JSON.stringify({ pageId: String(pageId), body: { representation: 'storage', value: `<p>${html}</p>` } });
+  const errors = [];
+  for (const who of ['asUser', 'asApp']) {
+    try {
+      const res = await api[who]().requestConfluence(route`/wiki/api/v2/footer-comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body,
+      });
+      if (res.ok) return;
+      errors.push(`${who}: ${res.status} ${(await res.text().catch(() => '')).slice(0, 150)}`);
+    } catch (err) {
+      errors.push(`${who}: ${err.message}`);
+    }
+  }
+  throw new Error(`Comment failed (${errors.join('; ')})`);
+}

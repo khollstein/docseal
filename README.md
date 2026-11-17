@@ -10,13 +10,14 @@ An internal Forge app for SOPs, safety procedures and policies:
 - **Workflow.**
   | Action | Who | Notes |
   |---|---|---|
-  | Submit for review | Any editor | Change summary required |
+  | Submit for review | Any editor | Change summary and a named approver (from the group) required |
   | Withdraw | Submitter or owner | |
-  | Approve | `doc-approvers` group | Not the person who submitted it (ISO segregation of duties). Bumps revision (Rev 1, 2, 3…) and **locks the page** to the approver group |
-  | Reject | `doc-approvers` group | Comment required |
+  | Approve | The named approver | Not the person who submitted it (ISO segregation of duties). Bumps revision (Rev 1, 2, 3…) and **locks the page** to the approver group |
+  | Reject | The named approver | Comment required |
   | Publish | Approver or owner | Sets effective date and next review date (+12 months) |
   | Start new revision | Approver or owner | Unlocks the page, back to Draft |
   | Retire | `doc-approvers` group | Reason required |
+- **Notifications.** The app posts a page comment @mentioning the person who needs to act, so Confluence sends them its usual email and bell notification. It notifies the approver on submit and withdraw, the submitter on approve and reject, and the owner on publish, retire and edits after approval. If a comment can't be posted, the action still goes through, and History shows "Notification could not be sent".
 - **Edit detection.** If an Approved/Published page is edited anyway, it goes back to Draft, is flagged “Edited after approval”, and the edit is logged.
 - **Audit trail (History tab).** Every action is stored write-once, with who, when, page version, comments and the lock result. Each entry is SHA-256 hash-chained to the previous one, and the History tab checks the chain each time it opens.
 - **Document Register.** *Apps → Document Register* in Confluence's top bar. Lists all controlled documents with number, title, type, revision, status, owner, approver, effective date and next review. Overdue reviews are highlighted. You can filter and search.

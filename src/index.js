@@ -19,7 +19,7 @@ import {
 } from './workflow.js';
 import { verifyChain } from './audit.js';
 import { appendAudit, claimDocNumber, getAudit, getDoc, listDocs, saveDoc } from './store.js';
-import { getPage, isInGroup, lockPage, unlockPage } from './confluence.js';
+import { getGroupMembers, getPage, isInGroup, lockPage, postMentionComment, unlockPage } from './confluence.js';
 
 const resolver = new Resolver();
 const wfOpts = { requireIndependentApproval: REQUIRE_INDEPENDENT_APPROVAL };
@@ -62,10 +62,16 @@ resolver.define(
   handled(async ({ context }) => {
     const pageId = pageIdFrom(context);
     const [doc, actor] = await Promise.all([getDoc(pageId), actorFrom(context)]);
+    const actions = describeActions(doc, actor);
+    // Approvers to choose from when submitting (excluding yourself if independence is required).
+    const approvers = actions.some((a) => a.name === 'submit')
+      ? (await getGroupMembers(APPROVER_GROUP)).filter((m) => !(REQUIRE_INDEPENDENT_APPROVAL && m.accountId === actor.accountId))
+      : [];
     return {
       doc: doc ? { ...doc, overdue: isReviewOverdue(doc) } : null,
       actor,
-      actions: describeActions(doc, actor),
+      actions,
+      approvers,
       docTypes: DOC_TYPES,
       approverGroup: APPROVER_GROUP,
     };
@@ -110,7 +116,13 @@ resolver.define(
     if (!doc) throw new WorkflowError('This page is not a controlled document.');
     const actor = await actorFrom(context);
     const page = await getPage(pageId);
-    const input = { changeSummary: payload?.changeSummary, comment: payload?.comment };
+    const input = { changeSummary: payload?.changeSummary, comment: payload?.comment, reviewerId: payload?.reviewerId };
+    if (name === 'submit' && input.reviewerId) {
+      const members = await getGroupMembers(APPROVER_GROUP);
+      if (!members.some((m) => m.accountId === input.reviewerId)) {
+        throw new WorkflowError(`The chosen approver is not in the “${APPROVER_GROUP}” group.`);
+      }
+    }
     const now = new Date().toISOString();
 
     let next = applyAction(doc, name, actor, input, {
@@ -146,12 +158,20 @@ resolver.define(
         pageVersion: page.version,
         comment: input.comment?.trim() || null,
         changeSummary: input.changeSummary?.trim() || null,
+        reviewerId: name === 'submit' ? input.reviewerId : undefined,
         lock,
       },
       now,
     );
     await saveDoc(next);
-    return { ok: true, lock };
+
+    // Notify by @mention comment. A failure here doesn't undo the action; it's logged in the audit trail.
+    const notified = await notify(doc, next, name, actor.accountId, input);
+    if (notified.failed) {
+      next = await appendAudit(next, 'notification_failed', null, { action: name, recipients: notified.recipients });
+      await saveDoc(next);
+    }
+    return { ok: true, lock, notified: !notified.failed };
   }),
 );
 
@@ -175,6 +195,45 @@ resolver.define(
 );
 
 export const handler = resolver.getDefinitions();
+
+// Who to tell, and what, after each action. `before`/`after` are the doc records.
+function notification(before, after, name, input) {
+  const label = `${after.docNumber} “${after.title}”`;
+  const comment = input?.comment?.trim();
+  switch (name) {
+    case 'submit':
+      return {
+        to: after.reviewerId,
+        text: `${label} has been submitted for your approval. Change: ${input.changeSummary.trim()}. Open Document control on this page to approve or reject it.`,
+      };
+    case 'withdraw':
+      return { to: before.reviewerId, text: `The review request for ${label} has been withdrawn. No action is needed.` };
+    case 'approve':
+      return { to: before.submittedBy, text: `${label} Rev ${after.revision} has been approved.${comment ? ` Comment: ${comment}` : ''} It can now be published.` };
+    case 'reject':
+      return { to: before.submittedBy, text: `${label} was rejected and returned to Draft. Reason: ${comment}` };
+    case 'publish':
+      return { to: after.ownerId, text: `${label} Rev ${after.revision} is now published and effective.` };
+    case 'retire':
+      return { to: after.ownerId, text: `${label} has been retired (obsolete). Reason: ${comment}` };
+    case 'edited_after_approval':
+      return { to: after.ownerId, text: `${label} was edited after approval, so it has returned to Draft. Submit it for review to re-approve it.` };
+    default:
+      return null;
+  }
+}
+
+async function notify(before, after, name, actorId, input) {
+  const n = notification(before, after, name, input);
+  if (!n || !n.to || n.to === actorId) return { failed: false };
+  try {
+    await postMentionComment(after.pageId, [{ mention: n.to }, ` ${n.text}`]);
+    return { failed: false };
+  } catch (err) {
+    console.error(err);
+    return { failed: true, recipients: [n.to] };
+  }
+}
 
 // Byline text, e.g. "SOP-004 · Rev 2 · Published".
 export async function bylineProps(payload) {
@@ -221,4 +280,9 @@ export async function onPageUpdated(event) {
     now,
   );
   await saveDoc(next);
+  const notified = await notify(doc, next, 'edited_after_approval', event.atlassianId ?? null);
+  if (notified.failed) {
+    next = await appendAudit(next, 'notification_failed', null, { action: 'edited_after_approval', recipients: notified.recipients });
+    await saveDoc(next);
+  }
 }

@@ -32,6 +32,7 @@ const EVENT_LABEL = {
   revise: 'New revision started',
   retire: 'Retired',
   edited_after_approval: 'Edited after approval (returned to Draft)',
+  notification_failed: 'Notification could not be sent',
 };
 
 const LOCK_LABEL = {
@@ -82,24 +83,34 @@ function Register({ docTypes, onDone }) {
   );
 }
 
-function Actions({ actions, onDone }) {
+function Actions({ actions, approvers, approverGroup, onDone }) {
   const [pending, setPending] = useState(null);
   const [text, setText] = useState('');
+  const [reviewer, setReviewer] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
+
+  const textField = (action) => action.requires.find((f) => f !== 'reviewerId');
+  const needsReviewer = (action) => action.requires.includes('reviewerId');
 
   const run = async (action) => {
     setBusy(true);
     setMessage(null);
-    const field = action.requires[0];
-    const res = await invoke('act', { action: action.name, ...(field ? { [field]: text } : {}) });
+    const field = textField(action);
+    const res = await invoke('act', {
+      action: action.name,
+      ...(field ? { [field]: text } : {}),
+      ...(needsReviewer(action) ? { reviewerId: reviewer?.value } : {}),
+    });
     setBusy(false);
     if (res?.error) return setMessage({ appearance: 'error', text: res.error });
-    if (res?.lock === 'lock_failed') {
-      setMessage({ appearance: 'warning', text: 'Approved, but the page could not be locked. Check the app has permission to set restrictions in this space.' });
-    }
+    const warnings = [];
+    if (res?.lock === 'lock_failed') warnings.push('The page could not be locked. Check the app has permission to set restrictions in this space.');
+    if (res?.notified === false) warnings.push('The notification comment could not be posted, so let them know directly.');
+    if (warnings.length) setMessage({ appearance: 'warning', text: `Done, but: ${warnings.join(' ')}` });
     setPending(null);
     setText('');
+    setReviewer(null);
     onDone();
   };
 
@@ -108,10 +119,14 @@ function Actions({ actions, onDone }) {
     if (action.requires.length) {
       setPending(action);
       setText('');
+      setReviewer(null);
     } else {
       run(action);
     }
   };
+
+  const ready = (action) =>
+    (!textField(action) || text.trim()) && (!needsReviewer(action) || reviewer);
 
   if (!actions.length) return <Text>No actions available to you at this stage.</Text>;
 
@@ -120,12 +135,30 @@ function Actions({ actions, onDone }) {
       {message && <SectionMessage appearance={message.appearance}><Text>{message.text}</Text></SectionMessage>}
       {pending ? (
         <Stack space="space.100">
+          {needsReviewer(pending) && (
+            <Stack space="space.050">
+              <Label labelFor="reviewer-input">Approver</Label>
+              {approvers.length ? (
+                <Select
+                  id="reviewer-input"
+                  options={approvers.map((a) => ({ label: a.displayName || a.accountId, value: a.accountId }))}
+                  value={reviewer}
+                  onChange={setReviewer}
+                  placeholder="Choose who will approve this revision"
+                />
+              ) : (
+                <SectionMessage appearance="warning">
+                  <Text>No one else is in the “{approverGroup}” group. Add an approver in Confluence admin first.</Text>
+                </SectionMessage>
+              )}
+            </Stack>
+          )}
           <Label labelFor="action-input">
-            {pending.requires[0] === 'changeSummary' ? 'What changed in this revision?' : `Reason (${pending.label.toLowerCase()})`}
+            {textField(pending) === 'changeSummary' ? 'What changed in this revision?' : `Reason (${pending.label.toLowerCase()})`}
           </Label>
           <TextArea id="action-input" value={text} onChange={(e) => setText(e.target.value)} />
           <ButtonGroup>
-            <Button appearance="primary" isDisabled={!text.trim() || busy} onClick={() => run(pending)}>
+            <Button appearance="primary" isDisabled={!ready(pending) || busy} onClick={() => run(pending)}>
               {pending.label}
             </Button>
             <Button appearance="subtle" onClick={() => setPending(null)}>Cancel</Button>
@@ -150,7 +183,7 @@ function Actions({ actions, onDone }) {
 }
 
 function Status({ state, onChange }) {
-  const { doc, actions, actor, approverGroup } = state;
+  const { doc, actions, actor, approverGroup, approvers } = state;
   return (
     <Stack space="space.200">
       <Inline space="space.100" alignBlock="center">
@@ -173,6 +206,9 @@ function Status({ state, onChange }) {
         {doc.status === 'in_review' && doc.submittedBy && (
           <Field label="Submitted by"><User accountId={doc.submittedBy} /></Field>
         )}
+        {doc.status === 'in_review' && doc.reviewerId && (
+          <Field label="Approver"><User accountId={doc.reviewerId} /></Field>
+        )}
         {doc.pendingChangeSummary && <Field label="Proposed change"><Text>{doc.pendingChangeSummary}</Text></Field>}
         {doc.approvedBy && (
           <Field label={`Rev ${doc.revision} approved`}>
@@ -184,7 +220,7 @@ function Status({ state, onChange }) {
         {doc.effectiveDate && <Field label="Effective"><Text>{formatDate(doc.effectiveDate)}</Text></Field>}
         {doc.nextReviewDue && <Field label="Next review"><Text>{formatDate(doc.nextReviewDue)}</Text></Field>}
       </Stack>
-      <Actions actions={actions} onDone={onChange} />
+      <Actions actions={actions} approvers={approvers || []} approverGroup={approverGroup} onDone={onChange} />
       {!actor.isApprover && (
         <Text size="small" color="color.text.subtlest">Approvals are limited to the “{approverGroup}” group.</Text>
       )}
@@ -223,6 +259,12 @@ function History() {
             {e.data?.pageVersion && <Text color="color.text.subtle">· page v{e.data.pageVersion}</Text>}
             {e.data?.lock && <Text color="color.text.subtle">· {LOCK_LABEL[e.data.lock]}</Text>}
           </Inline>
+          {e.data?.reviewerId && (
+            <Inline space="space.100" alignBlock="center">
+              <Text>Approver assigned:</Text>
+              <User accountId={e.data.reviewerId} />
+            </Inline>
+          )}
           {e.data?.changeSummary && <Text>Change: {e.data.changeSummary}</Text>}
           {e.data?.comment && <Text>Comment: {e.data.comment}</Text>}
         </Stack>
